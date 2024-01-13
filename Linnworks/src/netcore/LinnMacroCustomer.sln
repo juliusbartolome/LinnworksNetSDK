@@ -12,6 +12,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LinnworksMacroHelpers", "Li
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinnworksAPI2", "LinnworksAPI2\LinnworksAPI2.csproj", "{F7D61F58-E6AE-4855-AA7F-3A07F1F4B260}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Momentumhyper", "Momentumhyper", "{F02AB9C3-3E4B-4CF7-B10A-77829B1731F8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrderItemStockLocationAssignment", "OrderItemStockLocationAssignment\OrderItemStockLocationAssignment.csproj", "{612F1E1C-13A9-4716-AE5C-C8B7E4166560}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,11 +42,18 @@ Global
 		{F7D61F58-E6AE-4855-AA7F-3A07F1F4B260}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F7D61F58-E6AE-4855-AA7F-3A07F1F4B260}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F7D61F58-E6AE-4855-AA7F-3A07F1F4B260}.Release|Any CPU.Build.0 = Release|Any CPU
+		{612F1E1C-13A9-4716-AE5C-C8B7E4166560}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{612F1E1C-13A9-4716-AE5C-C8B7E4166560}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{612F1E1C-13A9-4716-AE5C-C8B7E4166560}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{612F1E1C-13A9-4716-AE5C-C8B7E4166560}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {90E2B423-5603-48FA-BA49-B572AF762A47}
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{612F1E1C-13A9-4716-AE5C-C8B7E4166560} = {F02AB9C3-3E4B-4CF7-B10A-77829B1731F8}
 	EndGlobalSection
 EndGlobal

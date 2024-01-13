@@ -1,4 +1,5 @@
 ﻿using System;
+using LinnworksAPI;
 
 namespace LinnMacroCustomer
 {
@@ -7,23 +8,12 @@ namespace LinnMacroCustomer
         public static void Main(string[] args)
         {
             //Replace the following with your application details and installation token
-            Guid applicationId = Guid.NewGuid();
-            Guid secretKey = Guid.NewGuid();
-            Guid token = Guid.NewGuid();
+            var applicationId = Guid.NewGuid();
+            var secretKey = Guid.NewGuid();
+            var token = Guid.NewGuid();
 
-            var macro = SetupMacro(applicationId, secretKey, token);
-
-            var result = macro.Execute(new Guid("37d8fb79-4eea-401b-911a-d5cb04db61a4"));
-
-            if (result == null)
-            {
-                Console.WriteLine("Stock item not found");
-            }
-            else
-            {
-                Console.WriteLine(result.ItemNumber);
-            }
-            Console.Read();
+            // ExecuteExampleMacro(applicationId, secretKey, token);
+            ExecuteOrderItemStockLocationAssignment(applicationId, secretKey, token);
         }
 
         private static LinnworksAPI.BaseSession Authorize(Guid applicationId, Guid secretKey, Guid token)
@@ -38,7 +28,8 @@ namespace LinnMacroCustomer
             });
         }
 
-        private static LinnworksMacro.LinnworksMacro SetupMacro(Guid applicationId, Guid secretKey, Guid token)
+        private static TMacro SetupMacro<TMacro>(Guid applicationId, Guid secretKey, Guid token)
+            where TMacro : LinnworksMacroHelpers.LinnworksMacroBase, new()
         {
             var auth = Authorize(applicationId, secretKey, token);
 
@@ -46,7 +37,7 @@ namespace LinnMacroCustomer
 
             var url = new Api2Helper().GetUrl(context.ApiServer);
 
-            var macro = new LinnworksMacro.LinnworksMacro()
+            var macro = new TMacro()
             {
                 Api = new LinnworksAPI.ApiObjectManager(context),
                 Api2 = new LinnworksAPI2.LinnworksApi2(auth.Token, url),
@@ -54,6 +45,27 @@ namespace LinnMacroCustomer
             };
 
             return macro;
+        }
+
+        private static void ExecuteExampleMacro(Guid applicationId, Guid secretKey, Guid token)
+        {
+            var macro = SetupMacro<LinnworksMacro.LinnworksMacro>(applicationId, secretKey, token);
+            
+            var pkStockItemId = new Guid("37d8fb79-4eea-401b-911a-d5cb04db61a4");
+            var result = macro.Execute(pkStockItemId);
+
+            Console.WriteLine(result == null ? "Stock item not found" : result.ItemNumber);     
+        }
+        
+        private static void ExecuteOrderItemStockLocationAssignment(Guid applicationId, Guid secretKey, Guid token)
+        {
+            var macro = SetupMacro<OrderItemStockLocationAssignment.LinnworksMacro>(applicationId, secretKey, token);
+            
+            var orderIds = new[] { new Guid("73e79b5b-5070-4ac6-95cc-849d296cc325") };
+            var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
+            var secondaryLocationId = new Guid("c4b5b631-36c8-4d96-93df-c150d8632c54");
+            
+            macro.Execute(orderIds, primaryLocationId, secondaryLocationId);
         }
     }
 }

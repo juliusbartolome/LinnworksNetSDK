@@ -26,6 +26,7 @@
     <ProjectReference Include="..\LinnworksAPI2\LinnworksAPI2.csproj" />
     <ProjectReference Include="..\LinnworksAPI\LinnworksAPI.csproj" />
     <ProjectReference Include="..\LinnworksMacro\LinnworksMacro.csproj" />
+    <ProjectReference Include="..\OrderItemStockLocationAssignment\OrderItemStockLocationAssignment.csproj" />
   </ItemGroup>
 
 </Project>
