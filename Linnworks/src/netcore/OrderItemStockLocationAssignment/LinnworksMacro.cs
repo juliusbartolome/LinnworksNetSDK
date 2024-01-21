@@ -3,34 +3,46 @@ using System.Collections.Generic;
 using System.Linq;
 using LinnworksAPI;
 
-namespace OrderItemStockLocationAssignment
+namespace LinnworksMacro
 {
     public class LinnworksMacro : LinnworksMacroHelpers.LinnworksMacroBase
     {
-        public void Execute(Guid[] orderIds, Guid primaryLocationId ,Guid[] alternateLocationIds)
+        // ReSharper disable once InconsistentNaming
+        public void Execute(Guid[] OrderIds, Guid primaryLocationId , Guid alternateLocationId1, Guid alternateLocationId2, Guid alternateLocationId3, Guid alternateLocationId4, Guid alternateLocationId5)
         {
+            var alternateLocationIds =
+                new[]
+                {
+                    alternateLocationId1,
+                    alternateLocationId2,
+                    alternateLocationId3,
+                    alternateLocationId4,
+                    alternateLocationId5
+                }
+                    .Where(id => id != Guid.Empty).ToArray();
+
             Logger.WriteInfo("Starting the execution of Linnworks Macro");
             try
             {
                 Logger.WriteInfo("Validating input parameters");
-                if (orderIds == null || orderIds.Length == 0)
+                if (OrderIds == null || OrderIds.Length == 0)
                 {
                     Logger.WriteInfo("No orders provided, skipping macro");
                     return;
                 }
-                
+
                 if (alternateLocationIds == null || alternateLocationIds.Length == 0)
                 {
                     Logger.WriteInfo("No alternate locations provided, skipping macro");
                     return;
                 }
-                
-                Logger.WriteInfo($"Order Ids: {string.Join(", ", orderIds)}");
+
+                Logger.WriteInfo($"Order Ids: {string.Join(", ", OrderIds)}");
                 Logger.WriteInfo($"Primary Location Id: {primaryLocationId}");
                 Logger.WriteInfo($"Alternate Location Ids: {string.Join(", ", alternateLocationIds)}");
 
                 Logger.WriteInfo("Fetching order details");
-                var allOrders = Api.Orders.GetOrdersById(orderIds.ToList());
+                var allOrders = Api.Orders.GetOrdersById(OrderIds.ToList());
                 var filteredOrders = allOrders.Where(o => o.FulfilmentLocationId == primaryLocationId).ToList();
 
                 Logger.WriteInfo($"Extracting backorder inventory allocations for {filteredOrders.Count} orders.");
@@ -59,7 +71,7 @@ namespace OrderItemStockLocationAssignment
                 var fulfilmentLocationId = backorderInventoryAllocation.FulfilmentLocationId;
                 var orderSource = backorderInventoryAllocation.OrderSource;
                 var orderSubSource = backorderInventoryAllocation.OrderSubSource;
-                
+
                 // Update order items with the new allocated quantity
                 Logger.WriteInfo("Updating order items based on allocations");
                 UpdateOrderItemsQuantityBasedOnAllocations(backorderInventoryAllocation, fulfilmentLocationId, orderSource, orderSubSource);
