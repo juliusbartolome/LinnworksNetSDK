@@ -70,6 +70,9 @@ namespace OrderItemStockLocationAssignment
                         Api.Orders.AddOrderItem(newOrder.OrderId, itemId, orderItem.ChannelSKU, locationId, quantity,
                             linePricingRequest);
                     }
+                    
+                    Api.ProcessedOrders.AddOrderNote(orderId, $"Created new order {newOrder.OrderId} to reallocate backorders", true);
+                    Api.ProcessedOrders.AddOrderNote(newOrder.OrderId, $"This order is reallocated based on order {orderId}", true);
                 }
             }
         }
@@ -102,10 +105,16 @@ namespace OrderItemStockLocationAssignment
                 foreach (var orderItem in order.Items)
                 {
                     var allocatedQuantityByLocationId = AllocateBackorderItemQuantityByLocationId(alternateLocationIds, backorderAvailabilityDetailsByItemId, orderItem);
-                    backorderInventoryAllocation.AddAllocationByItem(orderItem, allocatedQuantityByLocationId);
+                    if (allocatedQuantityByLocationId.Count != 0)
+                    {
+                        backorderInventoryAllocation.AddAllocationByItem(orderItem, allocatedQuantityByLocationId);
+                    }
                 }
 
-                backorderInventoryAllocations.Add(backorderInventoryAllocation);
+                if (backorderInventoryAllocation.AllocationQuantityByLocationAndItem.Count != 0)
+                {
+                    backorderInventoryAllocations.Add(backorderInventoryAllocation);
+                }
             }
 
             return backorderInventoryAllocations;
@@ -122,6 +131,12 @@ namespace OrderItemStockLocationAssignment
             
             var allocatedQuantityByLocationId = new Dictionary<Guid, int>();
             var unfulfilledQuantity = backorderAvailabilityDetails.Quantity > orderItem.Quantity ? orderItem.Quantity : backorderAvailabilityDetails.Quantity;
+
+            if (unfulfilledQuantity == 0)
+            {
+                return new Dictionary<Guid, int>();
+            }
+            
             for (var i = 0; i < alternateLocationIds.Length; i++)
             {
                 var locationId = alternateLocationIds[i];
