@@ -8,9 +8,9 @@ namespace LinnMacroCustomer
         public static void Main(string[] args)
         {
             //Replace the following with your application details and installation token
-            var applicationId = Guid.NewGuid();
-            var secretKey = Guid.NewGuid();
-            var token = Guid.NewGuid();
+            var applicationId = Guid.Parse("f3456aaf-1bf6-40be-ac43-05deac25ac58");
+            var secretKey = Guid.Parse("56c2931f-b01c-40a3-a929-7c56ff5bc746");
+            var token = Guid.Parse("4eb405fd8458b4d546701d71345bb777");
 
             // ExecuteExampleMacro(applicationId, secretKey, token);
             ExecuteOrderItemStockLocationAssignment(applicationId, secretKey, token);
@@ -61,11 +61,19 @@ namespace LinnMacroCustomer
         {
             var macro = SetupMacro<OrderItemStockLocationAssignment.LinnworksMacro>(applicationId, secretKey, token);
             
-            var orderIds = new[] { new Guid("73e79b5b-5070-4ac6-95cc-849d296cc325") };
-            var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
-            var secondaryLocationId = new Guid("c4b5b631-36c8-4d96-93df-c150d8632c54");
+            var orderIds = new[]
+            {
+                new Guid("cf172064-e6c5-4069-807f-9623b87c1710"),
+                new Guid("4c4705a4-ef2d-46ea-b72d-14459e0ec94f")
+            };
             
-            macro.Execute(orderIds, primaryLocationId, secondaryLocationId);
+            var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
+            var alternateLocationIds = new[]
+            {
+                new Guid("c4b5b631-36c8-4d96-93df-c150d8632c54")
+            };
+            
+            macro.Execute(orderIds, primaryLocationId, alternateLocationIds);
         }
     }
 }
