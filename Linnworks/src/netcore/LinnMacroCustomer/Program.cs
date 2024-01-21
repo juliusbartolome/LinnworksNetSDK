@@ -64,7 +64,8 @@ namespace LinnMacroCustomer
             var orderIds = new[]
             {
                 new Guid("cf172064-e6c5-4069-807f-9623b87c1710"),
-                new Guid("4c4705a4-ef2d-46ea-b72d-14459e0ec94f")
+                new Guid("4c4705a4-ef2d-46ea-b72d-14459e0ec94f"),
+                new Guid("77cd43ae-f9ca-4612-9687-4a351a5a9062"),
             };
             
             var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
