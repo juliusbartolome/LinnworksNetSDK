@@ -10,7 +10,7 @@ namespace LinnMacroCustomer
             //Replace the following with your application details and installation token
             var applicationId = Guid.Parse("f3456aaf-1bf6-40be-ac43-05deac25ac58");
             var secretKey = Guid.Parse("56c2931f-b01c-40a3-a929-7c56ff5bc746");
-            var token = Guid.Parse("4eb405fd8458b4d546701d71345bb777");
+            var token = Guid.Parse("9be93705b30b7932e95f7a107158278e");
 
             // ExecuteExampleMacro(applicationId, secretKey, token);
             ExecuteOrderItemStockLocationAssignment(applicationId, secretKey, token);
@@ -63,9 +63,7 @@ namespace LinnMacroCustomer
             
             var orderIds = new[]
             {
-                new Guid("cf172064-e6c5-4069-807f-9623b87c1710"),
-                new Guid("4c4705a4-ef2d-46ea-b72d-14459e0ec94f"),
-                new Guid("77cd43ae-f9ca-4612-9687-4a351a5a9062"),
+                new Guid("9089d6a6-ee80-43a3-a651-3bac214e1ca3"),
             };
             
             var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
