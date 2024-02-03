@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using LinnworksAPI;
 
 namespace OrderItemStockLocationAssignment
@@ -68,7 +67,19 @@ namespace OrderItemStockLocationAssignment
 
                 foreach (var order in orders)
                 {
-                    ProcessOrder(order, itemStockLevelsDictionaryByItemId);
+                    var orderBinRacks = GetAllOrderBinRacks(order, itemStockLevelsDictionaryByItemId);
+                    var originalPostageCost = order.ShippingInfo.PostageCost;
+                    var allOrderItemQuantity = orderBinRacks.Sum(br => br.Quantity);
+
+                    var orderBinRacksGroups = orderBinRacks
+                        .GroupBy(br => br.LocationId).Where(grp => grp.Any())
+                        .ToDictionary(grp => grp.Key,
+                            grp => grp.GroupBy(br => br.ItemId)
+                                .ToDictionary(brGrp => brGrp.Key,
+                                    brGrp => brGrp.Select(br => br.ToOrderItemBinRack()).ToList()));
+
+                    ProcessReallocatedOrders(order, orderBinRacksGroups, originalPostageCost, allOrderItemQuantity);
+                    ProcessOriginalOrder(order, orderBinRacksGroups[order.FulfilmentLocationId], originalPostageCost, allOrderItemQuantity);
                 }
             }
             catch (Exception e)
@@ -80,12 +91,106 @@ namespace OrderItemStockLocationAssignment
             Logger.WriteInfo("Completed the execution of Linnworks Macro");
         }
 
-        private void ProcessOrder(OrderDetails order,
+        private void ProcessReallocatedOrders(OrderDetails order, Dictionary<Guid, Dictionary<Guid, List<OrderItemBinRack>>> orderBinRacksGroups, double originalPostageCost,
+            int allOrderItemQuantity)
+        {
+            var clonedOrderItemsByItemId = order.Items.Select(CloneOrderItem).ToDictionary(i => i.ItemId);
+            foreach (var locationId in orderBinRacksGroups.Keys)
+            {
+                if (order.FulfilmentLocationId == locationId)
+                {
+                    continue;
+                }
+                
+                var locationBinRacksByItemId = orderBinRacksGroups[locationId];
+                var locationOrderItemQuantity = 0.0;
+                        
+                Logger.WriteInfo($"Creating new order for location: {locationId}");
+                var newOrder = Api.Orders.CreateNewOrder(locationId, false);
+
+                newOrder.GeneralInfo.Status = order.GeneralInfo.Status;
+                newOrder.GeneralInfo.Source = order.GeneralInfo.Source;
+                newOrder.GeneralInfo.SubSource = order.GeneralInfo.SubSource;
+
+                foreach (var itemId in locationBinRacksByItemId.Keys)
+                {
+                    var orderItem = clonedOrderItemsByItemId[itemId];
+                    orderItem.BinRacks = locationBinRacksByItemId[itemId];
+                    orderItem.Quantity = locationBinRacksByItemId[itemId].Sum(br => br.Quantity);
+
+                    if (orderItem.Quantity <= 0)
+                    {
+                        continue;
+                    }
+                    
+                    locationOrderItemQuantity += orderItem.Quantity;
+                    var linePricingRequest = new LinePricingRequest
+                    {
+                        DiscountPercentage = orderItem.Discount,
+                        PricePerUnit = orderItem.PricePerUnit,
+                        TaxInclusive = orderItem.TaxCostInclusive,
+                        TaxRatePercentage = orderItem.TaxRate
+                    };
+
+                    Api.Orders.AddOrderItem(newOrder.OrderId, itemId, orderItem.ChannelSKU, locationId,
+                        orderItem.Quantity, linePricingRequest);
+                }
+                        
+                var updateOrderShippingInfoRequest = new UpdateOrderShippingInfoRequest
+                {
+                    PostageCost = originalPostageCost * (locationOrderItemQuantity / allOrderItemQuantity),
+                    PostalServiceId = order.ShippingInfo.PostalServiceId,
+                    ManualAdjust = false
+                };
+
+                Api.Orders.SetOrderShippingInfo(newOrder.OrderId, updateOrderShippingInfoRequest);
+                Api.Orders.SetOrderGeneralInfo(newOrder.OrderId, newOrder.GeneralInfo, false);
+                Api.Orders.SetOrderCustomerInfo(newOrder.OrderId, order.CustomerInfo, false);
+
+                Logger.WriteInfo($"Finished creating new order for location: {locations[locationId]} with Order: {newOrder.NumOrderId} ({newOrder.OrderId})");
+                Api.ProcessedOrders.AddOrderNote(order.OrderId, $"Created new order {newOrder.NumOrderId} ({newOrder.OrderId}) to reallocate backorders to {locations[locationId]}", true);
+                Api.ProcessedOrders.AddOrderNote(newOrder.OrderId, $"This order is reallocated based on order {order.NumOrderId} ({order.OrderId}) from {locations[order.FulfilmentLocationId]}", true);
+            }
+        }
+
+        private void ProcessOriginalOrder(OrderDetails order, IDictionary<Guid, List<OrderItemBinRack>> orderBinRacks, double originalPostageCost,
+            int allOrderItemQuantity)
+        {
+            var originalOrderItemQuantity = 0.0;
+            foreach (var orderItem in order.Items)
+            {
+                orderItem.BinRacks = orderBinRacks[orderItem.ItemId];
+                orderItem.Quantity = orderItem.BinRacks.Sum(br => br.Quantity);
+                originalOrderItemQuantity += orderItem.Quantity;
+                if (orderItem.Quantity > 0)
+                {
+                    Logger.WriteInfo($"Updating order item: {orderItem.SKU} ({orderItem.ItemId}) bin racks");
+                    Api.Orders.UpdateOrderItem(order.OrderId, orderItem, order.FulfilmentLocationId,
+                        order.GeneralInfo.Source, order.GeneralInfo.SubSource);
+                    continue;
+                }
+                        
+                Logger.WriteInfo($"Order item: {orderItem.SKU} ({orderItem.ItemId}) has no stock, deleting order item");
+                Api.Orders.RemoveOrderItem(order.OrderId, orderItem.RowId, order.FulfilmentLocationId);
+            }
+                    
+            var updateOriginalOrderShippingInfoRequest = new UpdateOrderShippingInfoRequest
+            {
+                PostageCost = originalPostageCost * (originalOrderItemQuantity / allOrderItemQuantity),
+                PostalServiceId = order.ShippingInfo.PostalServiceId,
+                ManualAdjust = false
+            };
+
+            Api.Orders.SetOrderShippingInfo(order.OrderId, updateOriginalOrderShippingInfoRequest);
+        }
+
+        private IReadOnlyList<ItemBinRack> GetAllOrderBinRacks(OrderDetails order,
             IReadOnlyDictionary<Guid, IReadOnlyDictionary<Guid, ItemStockLevel>> itemStockLevelsDictionaryByItemId)
         {
             Logger.WriteInfo(
                 $"Processing order: {order.NumOrderId} ({order.OrderId}) - Location: {order.FulfilmentLocationId}");
 
+            var allItemBinRacks = new List<ItemBinRack>();
             foreach (var orderItem in order.Items)
             {
                 var itemStockLevelsByLocation = itemStockLevelsDictionaryByItemId[orderItem.StockItemId];
@@ -93,54 +198,30 @@ namespace OrderItemStockLocationAssignment
                 {
                     var message = $"No stock levels found for item: {orderItem.SKU} ({orderItem.ItemId})";
                     Logger.WriteInfo(message);
-                    Api.ProcessedOrders.AddOrderNote(order.OrderId, message, true);
                     continue;
                 }
 
-                orderItem.BinRacks = ReallocateOrderItemBinRacks(itemStockLevelsByLocation, orderItem);
-
-                AddBinRackReportOrderNote(order.OrderId, orderItem);
-
-                Logger.WriteInfo($"Updating order item: {orderItem.SKU} ({orderItem.ItemId}) bin racks");
-                Api.Orders.UpdateOrderItem(order.OrderId, orderItem, order.FulfilmentLocationId,
-                    order.GeneralInfo.Source, order.GeneralInfo.SubSource);
+                var computeDistributedItemBinRacks = ComputeDistributedItemBinRacks(itemStockLevelsByLocation, orderItem);
+                Logger.WriteInfo($"Found {computeDistributedItemBinRacks.Count} bin racks for order item: {orderItem.SKU} ({orderItem.ItemId})");
+                allItemBinRacks.AddRange(computeDistributedItemBinRacks);
             }
+
+            return allItemBinRacks;
         }
-
-        private void AddBinRackReportOrderNote(Guid orderId, OrderItem orderItem)
-        {
-            if (orderItem.BinRacks.Count <= 1)
-            {
-                var noBinRackMessage = $"No changes on bin racks for order item: {orderItem.SKU} ({orderItem.ItemId})";
-                Logger.WriteInfo(noBinRackMessage);
-                Api.ProcessedOrders.AddOrderNote(orderId, noBinRackMessage, true);
-                return;
-            }
-
-            var reportMessageStringBuilder = new StringBuilder();
-            reportMessageStringBuilder.AppendLine(
-                $"Finalized reallocation made on item: {orderItem.SKU} ({orderItem.ItemId})");
-            foreach (var binRack in orderItem.BinRacks)
-            {
-                reportMessageStringBuilder.AppendLine($"{locations[binRack.Location]}: {binRack.Quantity}");
-            }
-
-            var reportMessage = reportMessageStringBuilder.ToString();
-            Logger.WriteInfo(reportMessage);
-            Api.ProcessedOrders.AddOrderNote(orderId, reportMessage, true);
-        }
-
-        private List<OrderItemBinRack> ReallocateOrderItemBinRacks(
+        
+        private IReadOnlyList<ItemBinRack> ComputeDistributedItemBinRacks(
             IReadOnlyDictionary<Guid, ItemStockLevel> itemStockLevelsByLocation, OrderItem orderItem)
         {
-            var binRacksManager = new BinRacksManager(itemStockLevelsByLocation);
+            var binRacksManager = new BinRacksManager(orderItem.ItemId, itemStockLevelsByLocation);
             Logger.WriteInfo($"Checking bin racks for order item: {orderItem.SKU} ({orderItem.ItemId})");
-            foreach (var binRack in orderItem.BinRacks)
+            for (var binRackIndex = 0; binRackIndex < orderItem.BinRacks.Count; binRackIndex++)
             {
+                var binRack = orderItem.BinRacks[binRackIndex];
                 var runningBinRackQuantity = binRack.Quantity;
                 foreach (var alternateLocationId in alternateLocationIds)
                 {
-                    runningBinRackQuantity = binRacksManager.AllocateOrder(binRack.Location, alternateLocationId, runningBinRackQuantity);
+                    runningBinRackQuantity = binRacksManager.AllocateOrder(binRackIndex,
+                        binRack.Location, alternateLocationId, runningBinRackQuantity);
                     if (runningBinRackQuantity == 0)
                     {
                         break;
@@ -214,6 +295,58 @@ namespace OrderItemStockLocationAssignment
 
             return validLocationIds.ToArray();
         }
+        
+        private OrderItem CloneOrderItem(OrderItem orderItem)
+        {
+            return new OrderItem
+            {
+                ItemId = orderItem.ItemId,
+                ItemNumber = orderItem.ItemNumber,
+                SKU = orderItem.SKU,
+                ItemSource = orderItem.ItemSource,
+                Title = orderItem.Title,
+                Quantity = 0,
+                CategoryName = orderItem.CategoryName,
+                StockLevelsSpecified = orderItem.StockLevelsSpecified,
+                OnOrder = orderItem.OnOrder,
+                Level = orderItem.Level,
+                AvailableStock = orderItem.AvailableStock,
+                PricePerUnit = orderItem.PricePerUnit,
+                UnitCost = orderItem.UnitCost,
+                DespatchStockUnitCost = orderItem.DespatchStockUnitCost,
+                Discount = orderItem.Discount,
+                Tax = orderItem.Tax,
+                TaxRate = orderItem.TaxRate,
+                Cost = orderItem.Cost,
+                CostIncTax = orderItem.CostIncTax,
+                CompositeSubItems = orderItem.CompositeSubItems,
+                IsService = orderItem.IsService,
+                SalesTax = orderItem.SalesTax,
+                TaxCostInclusive = orderItem.TaxCostInclusive,
+                PartShipped = orderItem.PartShipped,
+                Weight = orderItem.Weight,
+                BarcodeNumber = orderItem.BarcodeNumber,
+                Market = orderItem.Market,
+                ChannelSKU = orderItem.ChannelSKU,
+                ChannelTitle = orderItem.ChannelTitle,
+                DiscountValue = orderItem.DiscountValue,
+                HasImage = orderItem.HasImage,
+                ImageId = orderItem.ImageId,
+                AdditionalInfo = orderItem.AdditionalInfo,
+                StockLevelIndicator = orderItem.StockLevelIndicator,
+                ShippingCost = orderItem.ShippingCost,
+                PartShippedQty = orderItem.PartShippedQty,
+                BatchNumberScanRequired = orderItem.BatchNumberScanRequired,
+                SerialNumberScanRequired = orderItem.SerialNumberScanRequired,
+                BinRack = orderItem.BinRack,
+                InventoryTrackingType = orderItem.InventoryTrackingType,
+                isBatchedStockItem = orderItem.isBatchedStockItem,
+                IsWarehouseManaged = orderItem.IsWarehouseManaged,
+                IsUnlinked = orderItem.IsUnlinked,
+                StockItemIntId = orderItem.StockItemIntId,
+                StockItemId = orderItem.StockItemId,
+            };
+        }
     }
 
     public class ItemStockLevel
@@ -277,19 +410,41 @@ namespace OrderItemStockLocationAssignment
         }
     }
 
+    public class ItemBinRack
+    {
+        public ItemBinRack(Guid itemId, Guid locationId, int quantity)
+        {
+            ItemId = itemId;
+            LocationId = locationId;
+            Quantity = quantity;
+        }
+
+        public Guid ItemId { get; }
+        public Guid LocationId { get; }
+        public int Quantity { get; set; }
+        
+        public OrderItemBinRack ToOrderItemBinRack() => new OrderItemBinRack
+        {
+            Location = LocationId,
+            Quantity = Quantity
+        };
+    }
+
     public class BinRacksManager
     {
+        private readonly Guid itemId;
         private readonly IReadOnlyDictionary<Guid, ItemStockLevel> stockItemLevelByLocation;
 
-        private readonly Dictionary<Guid, OrderItemBinRack>
-            binRackByLocation = new Dictionary<Guid, OrderItemBinRack>();
+        private readonly Dictionary<string, ItemBinRack>
+            binRacksByKey = new Dictionary<string, ItemBinRack>();
 
-        public BinRacksManager(IReadOnlyDictionary<Guid, ItemStockLevel> stockItemLevelByLocation)
+        public BinRacksManager(Guid itemId, IReadOnlyDictionary<Guid, ItemStockLevel> stockItemLevelByLocation)
         {
+            this.itemId = itemId;
             this.stockItemLevelByLocation = stockItemLevelByLocation;
         }
 
-        public int AllocateOrder(Guid sourceLocation, Guid targetLocation, int quantity)
+        public int AllocateOrder(int binRackIndex, Guid sourceLocation, Guid targetLocation, int quantity)
         {
             var sourceStockLevel = stockItemLevelByLocation[sourceLocation];
             var targetStockLevel = stockItemLevelByLocation[targetLocation];
@@ -303,22 +458,22 @@ namespace OrderItemStockLocationAssignment
             }
 
             sourceStockLevel.PullOutOrder(allocatedQuantity);
-            SetBinRack(targetLocation, allocatedQuantity);
+            var binRackKey = $"{binRackIndex}:{targetLocation}";
+            SetBinRack(binRackKey, targetLocation, allocatedQuantity);
             return backorderQuantity;
         }
 
-        private void SetBinRack(Guid location, int quantity)
+        private void SetBinRack(string key, Guid location, int quantity)
         {
-            if (!binRackByLocation.TryGetValue(location, out var binRack))
+            if (!binRacksByKey.TryGetValue(key, out var binRack))
             {
-                binRackByLocation.Add(location,
-                    new OrderItemBinRack { Location = location, Quantity = quantity });
+                binRacksByKey.Add(key, new ItemBinRack(itemId, location, quantity));
                 return;
             }
 
             binRack.Quantity = quantity;
         }
 
-        public List<OrderItemBinRack> ToList() => binRackByLocation.Values.ToList();
+        public List<ItemBinRack> ToList() => binRacksByKey.Values.ToList();
     }
 }
