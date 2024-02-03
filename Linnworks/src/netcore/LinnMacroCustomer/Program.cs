@@ -71,10 +71,15 @@ namespace LinnMacroCustomer
             var primaryLocationId = new Guid("fb26a277-0f33-4c58-8375-a6783aa21cdb");
             var alternateLocationIds = new[]
             {
-                new Guid("c4b5b631-36c8-4d96-93df-c150d8632c54")
+                new Guid("c4b5b631-36c8-4d96-93df-c150d8632c54"),
+                Guid.Empty,
+                Guid.Empty,
+                Guid.Empty,
+                Guid.Empty,
             };
-            
-            macro.Execute(orderIds, primaryLocationId, alternateLocationIds);
+
+            macro.Execute(orderIds, primaryLocationId, alternateLocationIds[0], alternateLocationIds[1],
+                alternateLocationIds[2], alternateLocationIds[3], alternateLocationIds[4]);
         }
     }
 }

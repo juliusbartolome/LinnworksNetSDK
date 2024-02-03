@@ -2,44 +2,70 @@
 using System.Collections.Generic;
 using System.Linq;
 using LinnworksAPI;
-using OrderItemStockLocationAssignment.Models;
 
 namespace OrderItemStockLocationAssignment
 {
     public class LinnworksMacro : LinnworksMacroHelpers.LinnworksMacroBase
     {
-        public void Execute(Guid[] orderIds, Guid primaryLocationId ,Guid[] alternateLocationIds)
+        // ReSharper disable once InconsistentNaming
+        public void Execute(Guid[] OrderIds, Guid primaryLocationId , Guid alternateLocationId1, Guid alternateLocationId2, Guid alternateLocationId3, Guid alternateLocationId4, Guid alternateLocationId5)
         {
+            var alternateLocationIds =
+                new[]
+                    {
+                        primaryLocationId,
+                        alternateLocationId1,
+                        alternateLocationId2,
+                        alternateLocationId3,
+                        alternateLocationId4,
+                        alternateLocationId5
+                    }
+                    .Where(id => id != Guid.Empty).ToArray();
+            
             Logger.WriteInfo("Starting the execution of Linnworks Macro");
             try
             {
                 Logger.WriteInfo("Validating input parameters");
-                if (orderIds == null || orderIds?.Length == 0)
+                if (OrderIds == null || OrderIds?.Length == 0)
                 {
                     Logger.WriteInfo("No orders provided, skipping macro");
                     return;
                 }
                 
-                if (alternateLocationIds == null || alternateLocationIds?.Length == 0)
+                if (alternateLocationIds?.Length == 0)
                 {
                     Logger.WriteInfo("No alternate locations provided, skipping macro");
                     return;
                 }
                 
-                Logger.WriteInfo($"Order Ids: {string.Join(", ", orderIds)}");
-                Logger.WriteInfo($"Primary Location Id: {primaryLocationId}");
+                Logger.WriteInfo($"Order Ids: {string.Join(", ", OrderIds)}");
                 Logger.WriteInfo($"Alternate Location Ids: {string.Join(", ", alternateLocationIds)}");
 
                 Logger.WriteInfo("Fetching order details");
-                var allOrders = Api.Orders.GetOrdersById(orderIds.ToList());
-                var filteredOrders = allOrders.Where(o => o.FulfilmentLocationId == primaryLocationId).ToList();
+                var allOrders = Api.Orders.GetOrdersById(OrderIds.ToList());
 
-                Logger.WriteInfo($"Extracting backorder inventory allocations for {filteredOrders.Count} orders.");
-                var backorderInventoryAllocations =
-                    ExtractBackorderInventoryAllocations(primaryLocationId, alternateLocationIds, filteredOrders);
+                var orders = allOrders.Where(o =>
+                    alternateLocationIds.Contains(o.FulfilmentLocationId)).ToList();
 
-                Logger.WriteInfo($"Total backorder inventory allocations: {backorderInventoryAllocations.Count}.");
-                ProcessBackorderAllocations(backorderInventoryAllocations);
+
+                var itemIds = orders.SelectMany(o => o.Items).Select(i => i.StockItemId).Distinct().ToList();
+                Logger.WriteInfo($"Getting stock levels for {itemIds.Count} items");
+                var itemStockLevelsDictionaryByItemId = GetItemStockLevelDictionary(itemIds, alternateLocationIds);
+
+                foreach (var order in orders)
+                {
+                    Logger.WriteInfo($"Processing order: {order.NumOrderId} ({order.OrderId}) - Location: {order.FulfilmentLocationId}");
+                    foreach (var orderItem in order.Items)
+                    {
+                        var reallocatedBinRacks = GetReallocatedBinRacks(orderItem, itemStockLevelsDictionaryByItemId,
+                            alternateLocationIds);
+
+                        orderItem.BinRacks = reallocatedBinRacks;
+                        Logger.WriteInfo($"Updating order item: {orderItem.SKU} ({orderItem.ItemId}) bin racks");
+                        Api.Orders.UpdateOrderItem(order.OrderId, orderItem, order.FulfilmentLocationId,
+                            order.GeneralInfo.Source, order.GeneralInfo.SubSource);
+                    }
+                }
             }
             catch (Exception e)
             {
@@ -49,189 +75,166 @@ namespace OrderItemStockLocationAssignment
             Logger.WriteInfo("Completed the execution of Linnworks Macro");
         }
 
-        private void ProcessBackorderAllocations(IReadOnlyCollection<BackorderInventoryAllocation> backorderInventoryAllocations)
-        {
-            foreach (var backorderInventoryAllocation in backorderInventoryAllocations)
-            {
-                var orderId = backorderInventoryAllocation.OrderId;
-                Logger.WriteInfo($"Processing backorder inventory allocation orderId: {orderId}");
-
-                var order = backorderInventoryAllocation.Order;
-                var fulfilmentLocationId = backorderInventoryAllocation.FulfilmentLocationId;
-                var orderSource = backorderInventoryAllocation.OrderSource;
-                var orderSubSource = backorderInventoryAllocation.OrderSubSource;
-                
-                // Update order items with the new allocated quantity
-                Logger.WriteInfo("Updating order items based on allocations");
-                UpdateOrderItemsQuantityBasedOnAllocations(backorderInventoryAllocation, fulfilmentLocationId, orderSource, orderSubSource);
-
-                // Create new order on each location with the allocated quantity
-                Logger.WriteInfo("Creating new orders based on allocations");
-                foreach (var locationId in backorderInventoryAllocation.LocationIds)
-                {
-                    Logger.WriteInfo($"Creating new order for location: {locationId}");
-                    var newOrder = Api.Orders.CreateNewOrder(locationId, false);
-
-                    newOrder.GeneralInfo.Status = order.GeneralInfo.Status;
-                    newOrder.GeneralInfo.Source = order.GeneralInfo.Source;
-                    newOrder.GeneralInfo.SubSource = order.GeneralInfo.SubSource;
-
-                    var updateOrderShippingInfoRequest = new UpdateOrderShippingInfoRequest
-                    {
-                        PostalServiceId = order.ShippingInfo.PostalServiceId,
-                        ManualAdjust = false
-                    };
-
-                    Api.Orders.SetOrderGeneralInfo(newOrder.OrderId, newOrder.GeneralInfo, false);
-                    Api.Orders.SetOrderShippingInfo(newOrder.OrderId, updateOrderShippingInfoRequest);
-                    Api.Orders.SetOrderCustomerInfo(newOrder.OrderId, order.CustomerInfo, false);
-
-                    var allocatedOrderItems = backorderInventoryAllocation.GetItemAllocationsByLocationId(locationId);
-                    foreach (var allocatedOrderItem in allocatedOrderItems)
-                    {
-                        var itemId = allocatedOrderItem.Key;
-                        var quantity = allocatedOrderItem.Value;
-
-                        var orderItem = backorderInventoryAllocation.GetOrderItem(itemId);
-                        var linePricingRequest = new LinePricingRequest
-                        {
-                            DiscountPercentage = orderItem.Discount,
-                            PricePerUnit = orderItem.PricePerUnit,
-                            TaxInclusive = orderItem.TaxCostInclusive,
-                            TaxRatePercentage = orderItem.TaxRate
-                        };
-
-                        Api.Orders.AddOrderItem(newOrder.OrderId, itemId, orderItem.ChannelSKU, locationId, quantity,
-                            linePricingRequest);
-                    }
-
-                    Logger.WriteInfo($"Finished creating new order for location: {locationId} with Order Id: {newOrder.OrderId}");
-                    Api.ProcessedOrders.AddOrderNote(orderId, $"Created new order {newOrder.OrderId} to reallocate backorders", true);
-                    Api.ProcessedOrders.AddOrderNote(newOrder.OrderId, $"This order is reallocated based on order {orderId}", true);
-                }
-            }
-        }
-
-        private void UpdateOrderItemsQuantityBasedOnAllocations(BackorderInventoryAllocation backorderInventoryAllocation,
-            Guid fulfilmentLocationId, string orderSource, string orderSubSource)
-        {
-            Logger.WriteInfo("Starting the update of Order Items quantity based on allocations.");
-            foreach (var orderItem in backorderInventoryAllocation.OrderItems)
-            {
-                var allocatedQuantity = backorderInventoryAllocation.GetAllocatedQuantity(orderItem.StockItemId);
-                if (allocatedQuantity == 0)
-                {
-                    continue;
-                }
-
-                Logger.WriteInfo($"Updating quantity for Order Item: {orderItem.StockItemId}.");
-                orderItem.Quantity -= allocatedQuantity;
-
-                Api.Orders.UpdateOrderItem(backorderInventoryAllocation.OrderId, orderItem, fulfilmentLocationId,
-                    orderSource, orderSubSource);
-            }
-            Logger.WriteInfo("Updated the order items quantity based on allocations.");
-        }
-
-        private IReadOnlyCollection<BackorderInventoryAllocation> ExtractBackorderInventoryAllocations(Guid primaryLocationId, Guid[] alternateLocationIds, List<OrderDetails> orders)
-        {
-            var backorderInventoryAllocations = new List<BackorderInventoryAllocation>();
-            Logger.WriteInfo("Generating backorder availability details for items.");
-            var backorderAvailabilityDetailsByItemId = GetBBackorderAvailabilityDetailsByItemId(orders, primaryLocationId, alternateLocationIds);
-            foreach (var order in orders)
-            {
-                var backorderInventoryAllocation = new BackorderInventoryAllocation(order);
-                foreach (var orderItem in order.Items)
-                {
-                    Logger.WriteInfo($"Allocating backorder items quantities for order item: {orderItem.StockItemId}");
-                    var allocatedQuantityByLocationId = AllocateBackorderItemQuantityByLocationId(alternateLocationIds, backorderAvailabilityDetailsByItemId, orderItem);
-                    if (allocatedQuantityByLocationId.Count != 0)
-                    {
-                        backorderInventoryAllocation.AddAllocationByItem(orderItem, allocatedQuantityByLocationId);
-                    }
-                }
-
-                if (backorderInventoryAllocation.AllocationQuantityByLocationAndItem.Count != 0)
-                {
-                    backorderInventoryAllocations.Add(backorderInventoryAllocation);
-                }
-            }
-            Logger.WriteInfo($"Completed allocation of backorders. Total allocations:{backorderInventoryAllocations.Count}");
-            return backorderInventoryAllocations;
-        }
-
-        private static IReadOnlyDictionary<Guid, int> AllocateBackorderItemQuantityByLocationId(Guid[] alternateLocationIds,
-            IReadOnlyDictionary<Guid, BackorderAvailabilityDetails> backorderAvailabilityDetailsByItemId, OrderItem orderItem)
-        {
-            if (!backorderAvailabilityDetailsByItemId.TryGetValue(orderItem.StockItemId, out var backorderAvailabilityDetails))
-            {
-                return new Dictionary<Guid, int>();
-            }
-
-            var allocatedQuantityByLocationId = new Dictionary<Guid, int>();
-            var unfulfilledQuantity = backorderAvailabilityDetails.Quantity > orderItem.Quantity ? orderItem.Quantity : backorderAvailabilityDetails.Quantity;
-
-            if (unfulfilledQuantity == 0)
-            {
-                return new Dictionary<Guid, int>();
-            }
-
-            for (var i = 0; i < alternateLocationIds.Length; i++)
-            {
-                var locationId = alternateLocationIds[i];
-                var availableQuantity = backorderAvailabilityDetails.AlternateLocationAvailableQuantity[i];
-
-                if (availableQuantity >= unfulfilledQuantity)
-                {
-                    allocatedQuantityByLocationId.Add(locationId, unfulfilledQuantity);
-                    break;
-                }
-
-                allocatedQuantityByLocationId.Add(locationId, availableQuantity);
-                unfulfilledQuantity -= availableQuantity;
-            }
-
-            return allocatedQuantityByLocationId;
-        }
-
-        private IReadOnlyDictionary<Guid, BackorderAvailabilityDetails> GetBBackorderAvailabilityDetailsByItemId(
-            IEnumerable<OrderDetails> orders,
-            Guid primaryLocationId,
+        private List<OrderItemBinRack> GetReallocatedBinRacks(OrderItem orderItem, IReadOnlyDictionary<Guid, IReadOnlyDictionary<Guid, ItemStockLevel>> itemStockLevelsDictionaryByItemId,
             Guid[] alternateLocationIds)
         {
-            Logger.WriteInfo("Generating Backorder Availability details.");
-            var orderStockItemIds =  orders.SelectMany(o => o.Items).Select(i => i.StockItemId).Distinct().ToList();
-            var request = new GetStockLevel_BatchRequest { StockItemIds = orderStockItemIds };
-
-            var batchResponses = Api.Stock.GetStockLevel_Batch(request);
-
-            var result = new Dictionary<Guid, BackorderAvailabilityDetails>();
-            var alternateLocationAvailableQuantity = new int[alternateLocationIds.Length];
-            foreach (var batchResponse in batchResponses)
+            var itemId = orderItem.StockItemId;
+            var itemStockLevelsByLocation = itemStockLevelsDictionaryByItemId[itemId]; 
+            if (itemStockLevelsByLocation.Count == 0)
             {
-                var availableStockInLocations =
-                    batchResponse.StockItemLevels.ToDictionary(sil => sil.Location.StockLocationId,
-                        sil => sil.Available);
-
-                if (!availableStockInLocations.TryGetValue(primaryLocationId, out var primaryLocationAvailableStock)
-                    || primaryLocationAvailableStock > 0)
+                Logger.WriteInfo($"No stock levels found for item: {orderItem.SKU} ({orderItem.ItemId}) in {nameof(itemStockLevelsDictionaryByItemId)}");
+                return new List<OrderItemBinRack>();
+            }
+             
+            var binRacksManager = new BinRacksManager(itemStockLevelsByLocation);
+            Logger.WriteInfo($"Checking bin racks for order item: {orderItem.SKU} ({orderItem.ItemId})");
+            foreach (var binRack in orderItem.BinRacks)
+            {
+                var runningBinRackQuantity = binRack.Quantity;
+                foreach (var alternateLocationId in alternateLocationIds)
                 {
-                    continue;
+                    binRacksManager.AllocateOrder(binRack.Location, alternateLocationId, runningBinRackQuantity);
+                    runningBinRackQuantity = binRacksManager.GetQuantity(binRack.Location);
                 }
-
-                for (var i = 0; i < alternateLocationIds.Length; i++)
-                {
-                    availableStockInLocations.TryGetValue(alternateLocationIds[i],
-                        out var alternateLocationAvailableStock);
-                    alternateLocationAvailableQuantity[i] = alternateLocationAvailableStock;
-                }
-
-                var backorder = new BackorderAvailabilityDetails(primaryLocationAvailableStock, alternateLocationAvailableQuantity);
-                result.Add(batchResponse.pkStockItemId, backorder);
             }
 
-            Logger.WriteInfo($"Completed generation of Backorder Availability details for {result.Count} items.");
+            return binRacksManager.ToList();
+        }
+
+        private IReadOnlyDictionary<Guid, IReadOnlyDictionary<Guid, ItemStockLevel>> GetItemStockLevelDictionary(IReadOnlyCollection<Guid> itemIds, Guid[] alternateLocationIds)
+        {
+            var request = new GetStockLevel_BatchRequest { StockItemIds = itemIds.ToList() };
+            var batchResponses = Api.Stock.GetStockLevel_Batch(request);
+
+            var stockLevelItemsByItemIdThenByLocationId = (from response in batchResponses
+                    from stockItemLevel in response.StockItemLevels
+                    where alternateLocationIds.Contains(stockItemLevel.Location.StockLocationId)
+                    select new ItemStockLevel(stockItemLevel.StockItemId, stockItemLevel.Location.StockLocationId,
+                        stockItemLevel.Available, stockItemLevel.InOrders))
+                .GroupBy(l => l.Id, l => l)
+                .ToDictionary(grp => grp.Key, grp => grp.ToDictionary(l => l.LocationId, l => l));
+
+            var result = new Dictionary<Guid, IReadOnlyDictionary<Guid, ItemStockLevel>>();
+            foreach (var itemId in itemIds)
+            {
+                var locationStockLevels = stockLevelItemsByItemIdThenByLocationId.TryGetValue(itemId, out var stockLevelItemsByLocationId)
+                    ? stockLevelItemsByLocationId
+                    : new Dictionary<Guid, ItemStockLevel>();
+
+                foreach (var alternateLocationId in alternateLocationIds)
+                {
+                    if (!locationStockLevels.TryGetValue(alternateLocationId, out var stockLevelItem))
+                    {
+                        locationStockLevels.Add(alternateLocationId, ItemStockLevel.Empty(itemId, alternateLocationId));
+                    }
+                }
+                
+                result.Add(itemId, locationStockLevels);
+            }
+
             return result;
         }
+    }
+
+    public class ItemStockLevel
+    {
+        public static ItemStockLevel Empty(Guid itemId, Guid locationId) =>
+            new ItemStockLevel(itemId, locationId, 0, 0);
+        
+        public ItemStockLevel(Guid id, Guid locationId, int availableQuantity, int inOrderQuantity)
+        {
+            Id = id;
+            LocationId = locationId;
+            OriginalAvailableQuantity = availableQuantity;
+            OriginalInOrderQuantity = inOrderQuantity;
+            OriginalStockQuantity = availableQuantity + inOrderQuantity;
+        }
+
+        public Guid Id { get; }
+        public Guid LocationId { get; }
+        public int OriginalStockQuantity { get; }
+        public int OriginalAvailableQuantity { get; }
+        public int OriginalInOrderQuantity { get; }
+        public int RunningAvailableQuantity { get; private set; }
+        public int RunningInOrderQuantity { get; private set; }
+        
+        public int GetAllocatedQuantity(int quantity)
+        {
+            return quantity > RunningAvailableQuantity ? RunningAvailableQuantity : quantity;
+        }
+
+        public int GetBackorderQuantity(int quantity)
+        {
+            return quantity > RunningAvailableQuantity ? quantity - RunningAvailableQuantity : 0;
+        }
+        
+        public void MakeOrder(int quantity)
+        {
+            if (quantity > RunningAvailableQuantity)
+            {
+                throw new InvalidOperationException("Insufficient stock available");
+            }
+            
+            RunningAvailableQuantity -= quantity;
+            RunningInOrderQuantity += quantity;
+        }
+
+        public void PullOutOrder(int quantity)
+        {
+            if (quantity > RunningInOrderQuantity)
+            {
+                throw new InvalidOperationException("Insufficient stock in order");
+            }
+            
+            RunningAvailableQuantity += quantity;
+            RunningInOrderQuantity -= quantity;
+        }
+    }
+
+    public class BinRacksManager
+    {
+        private readonly IReadOnlyDictionary<Guid, ItemStockLevel> stockItemLevelByLocation;
+        private readonly Dictionary<Guid, OrderItemBinRack> binRackByLocation = new Dictionary<Guid, OrderItemBinRack>();
+
+        public BinRacksManager(IReadOnlyDictionary<Guid, ItemStockLevel> stockItemLevelByLocation)
+        {
+            this.stockItemLevelByLocation = stockItemLevelByLocation;
+        }
+        
+        public void AllocateOrder(Guid sourceLocation, Guid targetLocation, int quantity)
+        {
+            var sourceStockLevel = stockItemLevelByLocation[sourceLocation];
+            var targetStockLevel = stockItemLevelByLocation[targetLocation];
+            
+            if (targetStockLevel.RunningAvailableQuantity == 0)
+            {
+                return;
+            }
+
+            var allocatedQuantity = targetStockLevel.GetAllocatedQuantity(quantity);
+            var backorderQuantity = targetStockLevel.GetBackorderQuantity(quantity);
+            
+            targetStockLevel.MakeOrder(allocatedQuantity);
+            sourceStockLevel.PullOutOrder(allocatedQuantity);
+            
+            SetBinRack(targetLocation, allocatedQuantity);
+            SetBinRack(sourceLocation, backorderQuantity);
+        }
+        
+        public int GetQuantity(Guid location) => binRackByLocation.TryGetValue(location, out var binRack) ? binRack.Quantity : 0;
+        
+        private void SetBinRack(Guid location, int quantity)
+        {
+            if (!binRackByLocation.TryGetValue(location, out var binRack))
+            {
+                binRackByLocation.Add(location,
+                    new OrderItemBinRack { Location = location, Quantity = quantity });
+                return;
+            }
+
+            binRack.Quantity = quantity;
+        }
+
+        public List<OrderItemBinRack> ToList() => binRackByLocation.Values.ToList();
     }
 }
